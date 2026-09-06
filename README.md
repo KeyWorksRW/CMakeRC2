@@ -139,6 +139,34 @@ must be preserved.
    target_link_libraries(my-program PRIVATE foo::rc)
    ```
 
+   **Note: Linking into a shared library.**
+
+   If you link the generated static resource library into a `SHARED` library
+   instead of an executable, you will hit a linker error such as:
+
+   ```
+   /usr/bin/ld: thelibx-resources.a(lib.cpp.o): relocation R_X86_64_PC32 against
+   symbol ... can not be used when making a shared object; recompile with -fPIC
+   ```
+
+   This happens because a static library is normally compiled without
+   position-independent code, but a shared library requires it. Fix it by
+   setting the `POSITION_INDEPENDENT_CODE` property on the generated resource
+   library target:
+
+   ```cmake
+   cmrc_add_resource_library(foo-resources ALIAS foo::rc NAMESPACE foo ...)
+   set_property(TARGET foo-resources PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+   add_library(my-library SHARED mylib.cpp)
+   target_link_libraries(my-library PRIVATE foo::rc)
+   ```
+
+   The property must be set on the real target (`foo-resources`), not on its
+   alias (`foo::rc`), since aliases are not permitted in `set_property()`.
+   Alternatively, you can set `CMAKE_POSITION_INDEPENDENT_CODE ON` globally
+   before defining your targets, which compiles everything with `-fPIC`.
+
 4. Inside of the source files, any time you wish to use the library, include the
    `cmrc/cmrc.hpp` header, which will automatically become available to any
    target that links to a generated resource library target, as `my-program`
