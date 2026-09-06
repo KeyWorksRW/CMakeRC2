@@ -62,8 +62,15 @@ with a binary to your users.
 
 ## What is Special About CMakeRC?
 
-CMakeRC is implemented as a single CMake module, `CMakeRC.cmake`. No additional
-libraries or headers are required.
+CMakeRC is distributed as a CMake module, `CMakeRC.cmake`, along with the C++
+source files it generates at build time: `include/cmrc/cmrc.hpp` (the runtime
+header) and `cmake/cmrc_lib.cpp.in` (the per-library loader template). Keeping
+these sources as real, readable files means they can be code-reviewed and
+edited directly in the repository.
+
+`CMakeRC.cmake` pulls in the other sources by relative path, so the whole
+repository is the distribution unit — no external libraries or headers are
+required.
 
 This project was initially written as a "literate programming" experiment. [The process for the pre-2.0 version can be read about here](https://vector-of-bool.github.io/2017/01/21/cmrc.html).
 
@@ -72,18 +79,32 @@ still applies.
 
 ## Installing
 
-Installing CMakeRC is designed to be as simple as possible. The only thing
-required is the `CMakeRC.cmake` script. You can copy it into your project
-directory (recommended) or install it as a package and get all the features you
-need.
+```cmake
+FetchContent_Declare(
+    cmrc
+    GIT_REPOSITORY https://github.com/KeyWorksRW/CMakeRC2.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+    DOWNLOAD_NO_PROGRESS TRUE
+)
+FetchContent_MakeAvailable(cmrc)
 
-For [vcpkg](https://github.com/microsoft/vcpkg) users there is a `cmakerc` [port](https://github.com/microsoft/vcpkg/tree/master/ports/cmakerc) that can be installed via `vcpkg install cmakerc` or by adding it to `dependencies` section of your `vcpkg.json` file.
+# cmrc's top-level CMakeLists already includes the module, but include by full
+# path to guarantee cmrc_add_resource_library() is defined regardless of
+# module-path resolution.
+include("${cmrc_SOURCE_DIR}/CMakeRC.cmake")
+```
+
+Alternatively, you can vendor the repository into your own tree (or copy just
+`CMakeRC.cmake`, `include/`, and `cmake/`) and include it the same way. The
+module resolves its helper sources relative to its own location, so the layout
+must be preserved.
 
 ## Usage
 
-1. Once installed, simply import the `CMakeRC.cmake` script. If you placed the
-   module in your project directory (recommended), simply use `include(CMakeRC)`
-   to import the module. If you installed it as a package, use `find_package(CMakeRC)`.
+1. Once installed, simply import the `CMakeRC.cmake` script with `include()` to
+   import the module. See [Installing](#installing) for how to make it
+   available in your project.
 
 2. Once included, create a new resource library using `cmrc_add_resource_library`,
    like this:

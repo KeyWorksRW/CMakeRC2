@@ -94,3 +94,8 @@ add_test(
         -DBIN_ROOT=${CMAKE_CURRENT_BINARY_DIR}/header_regen_scratch
         -P ${CMAKE_CURRENT_SOURCE_DIR}/header_regen/run.cmake
     )
+
+
+# Regression tests for the 2026-09-06 code review of include/cmrc/cmrc.hpp
+# (see .ttm/code-review-cmrc-hpp.md for the fixes under test).
+add_subdirectory(review_fixes)
