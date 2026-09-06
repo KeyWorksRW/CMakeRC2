@@ -396,14 +396,29 @@ public:
 ]==])
 
 set(cmrc_hpp "${CMRC_INCLUDE_DIR}/cmrc/cmrc.hpp" CACHE INTERNAL "")
-set(_generate 1)
-if(EXISTS "${cmrc_hpp}")
-    file(READ "${cmrc_hpp}" _current)
-    if(_current STREQUAL hpp_content)
-        set(_generate 0)
+# Generate the header as a declared build-time product (custom command +
+# custom target) instead of a bare configure-time file(GENERATE). With the
+# Ninja generator, a build-tree file that is listed in DEPENDS but is not
+# the OUTPUT/BYPRODUCTS of any command triggers the CMP0058 developer
+# warning (see https://github.com/KeyWorksRW/CMakeRC2/issues/17).
+# copy_if_different preserves the old behavior of only touching the header
+# when its content actually changes, so incremental builds stay clean.
+set(cmrc_hpp_tmpl "${CMRC_INCLUDE_DIR}/cmrc/cmrc.hpp.in")
+if(NOT EXISTS "${cmrc_hpp_tmpl}")
+    file(WRITE "${cmrc_hpp_tmpl}" "${hpp_content}")
+else()
+    file(READ "${cmrc_hpp_tmpl}" _tmpl_current)
+    if(NOT _tmpl_current STREQUAL hpp_content)
+        file(WRITE "${cmrc_hpp_tmpl}" "${hpp_content}")
     endif()
 endif()
-file(GENERATE OUTPUT "${cmrc_hpp}" CONTENT "${hpp_content}" CONDITION ${_generate})
+add_custom_command(
+    OUTPUT "${cmrc_hpp}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${cmrc_hpp_tmpl}" "${cmrc_hpp}"
+    COMMENT "Generating cmrc.hpp"
+    DEPENDS "${cmrc_hpp_tmpl}"
+    )
+add_custom_target(cmrc-base-hdr ALL DEPENDS "${cmrc_hpp}")
 
 add_library(cmrc-base INTERFACE)
 target_include_directories(cmrc-base INTERFACE $<BUILD_INTERFACE:${CMRC_INCLUDE_DIR}>)
@@ -496,6 +511,9 @@ function(cmrc_add_resource_library name)
     # with a character array compiled in containing the contents of the
     # corresponding resource file.
     add_library(${name} ${ARG_TYPE} ${libcpp})
+    # Ensure the generated cmrc/cmrc.hpp header exists before this library
+    # (and anything that links it) is compiled.
+    add_dependencies(${name} cmrc-base-hdr)
     set_property(TARGET ${name} PROPERTY CMRC_LIBDIR "${libdir}")
     set_property(TARGET ${name} PROPERTY CMRC_NAMESPACE "${ARG_NAMESPACE}")
     target_link_libraries(${name} PUBLIC cmrc::base)
