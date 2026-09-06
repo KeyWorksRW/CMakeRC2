@@ -78,3 +78,19 @@ cmrc_add_test(
     NAME enoent
     WILL_FAIL
     )
+
+# Regression test for https://github.com/KeyWorksRW/CMakeRC2/issues/17
+# (CMP0058: cmrc/cmrc.hpp must be an explicit build-time product, not a
+# configure-time file(GENERATE) side effect, or Ninja flags the resource
+# loader's DEPENDS on it as an undeclared byproduct). The driver script
+# configures and builds a tiny consumer project, deletes the generated
+# header and resource-loader sources, then rebuilds: with the fix the header
+# is regenerated and the build succeeds; without it the rebuild fails.
+add_test(
+    NAME header_regen
+    COMMAND ${CMAKE_COMMAND}
+        -DCMRC_MODULE=${PROJECT_SOURCE_DIR}/CMakeRC.cmake
+        -DGEN=${CMAKE_GENERATOR}
+        -DBIN_ROOT=${CMAKE_CURRENT_BINARY_DIR}/header_regen_scratch
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/header_regen/run.cmake
+    )
