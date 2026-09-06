@@ -1,7 +1,45 @@
 # CMakeRC - A Standalone CMake-Based C++ Resource Compiler
 
+> **Unofficial community continuation** of
+> [vector-of-bool/cmrc](https://github.com/vector-of-bool/cmrc) — see
+> [What Is This Fork?](#what-is-this-fork) below.
+
 CMakeRC is a resource compiler provided in a single CMake script that can easily
 be included in another project.
+
+## What Is This Fork?
+
+This repository is an **unofficial, community-maintained continuation** of
+[vector-of-bool/cmrc](https://github.com/vector-of-bool/cmrc), the original
+Standalone CMake-Based C++ Resource Compiler by
+[vector-of-bool](https://github.com/vector-of-bool).
+
+### Why does this fork exist?
+
+The original project has been **unmaintained for over three years**. Since then:
+
+- **17 issues** have accumulated without a response or fix
+- **10 pull requests** (including bug fixes and CMake compatibility updates) remain
+  open and unreviewed
+- The bundled code is starting to fall behind current CMake releases, and upcoming
+  CMake deprecations will likely begin emitting warnings for the older requirement
+  levels used in the project
+
+This fork was created so that those fixes and improvements have somewhere to land
+— and so that the project keeps working with modern CMake for the people who use it.
+
+### A note on status
+
+This is a **community continuation**, **not** an official successor. The original
+author is not involved, and this fork carries no endorsement from them. The goal is
+simply to keep a useful, actively used library maintained.
+
+### Credits
+
+All credit for the original design and implementation goes to
+[vector-of-bool](https://github.com/vector-of-bool). The MIT license in this
+repository retains the original copyright notice; additional copyright lines cover
+only the modifications made in this fork.
 
 ## What is a "Resource Compiler"?
 
