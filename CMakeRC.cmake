@@ -41,8 +41,12 @@ if(_CMRC_GENERATE_MODE)
     else()
         string(CONFIGURE [[
             namespace { const char file_array[] = {
-            #if defined(__has_embed) && __has_embed("@INPUT_FILE@")
+            #if defined(__has_embed)
+            #  if __has_embed("@INPUT_FILE@")
             #embed "@INPUT_FILE@"
+            #  else
+            @chars@ 0
+            #  endif
             #else
             @chars@ 0
             #endif
