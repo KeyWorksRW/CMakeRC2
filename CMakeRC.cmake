@@ -64,7 +64,12 @@ set(_CMRC_SCRIPT "${CMAKE_CURRENT_LIST_FILE}" CACHE INTERNAL "Path to CMakeRC sc
 # CMAKE_CURRENT_LIST_DIR (it re-resolves to the caller's file), so file(READ)
 # and friends inside the API functions must resolve the helper sources
 # relative to this.
-set(_CMRC_MODULE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+# Cached INTERNAL so the path is global like _CMRC_SCRIPT: when included from
+# a FetchContent subdirectory, API functions called from the parent project
+# must still see the module's directory (directory scopes inherit downward
+# only).
+set(_CMRC_MODULE_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE INTERNAL "Path to CMakeRC module directory")
 
 function(_cmrc_normalize_path var)
     set(path "${${var}}")
