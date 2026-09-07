@@ -37,6 +37,18 @@ set(_version 3.0.0)
 cmake_minimum_required(VERSION 3.12...4.0)
 include(CMakeParseArguments)
 
+# CMake 3.31+ accepts a CODEGEN keyword in add_custom_command() which adds the
+# generated files to the builtin `codegen` target, so lint/CI jobs can generate
+# resources without compiling them. The keyword requires policy CMP0171 to be
+# NEW. The 3.12...4.0 ceiling above already sets it on 3.31+ (the policy is
+# introduced in 3.31), but this also covers consumers who include this module
+# from a project whose own policy version is older. On CMake < 3.31 the policy
+# does not exist, so this block is a no-op and the module still works with the
+# 3.12 minimum.
+if(POLICY CMP0171)
+    cmake_policy(SET CMP0171 NEW)
+endif()
+
 if(COMMAND cmrc_add_resource_library)
     if(NOT DEFINED _CMRC_VERSION OR NOT (_version STREQUAL _CMRC_VERSION))
         message(WARNING "More than one CMakeRC version has been included in this project.")
@@ -128,10 +140,18 @@ function(cmrc_add_resource_library name)
     string(REPLACE "\n        " "\n" cpp_content "${cpp_content}")
     file(GENERATE OUTPUT "${lib_tmp_cpp}" CONTENT "${cpp_content}")
     get_filename_component(libcpp "${libdir}/lib.cpp" ABSOLUTE)
+    # CODEGEN is only valid when the policy exists; expand to nothing on older
+    # CMake so add_custom_command() accepts it on 3.31+ and ignores it below.
+    if(POLICY CMP0171)
+        set(maybe_CODEGEN CODEGEN)
+    else()
+        set(maybe_CODEGEN "")
+    endif()
     add_custom_command(OUTPUT "${libcpp}"
         DEPENDS "${lib_tmp_cpp}" "${cmrc_hpp}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${lib_tmp_cpp}" "${libcpp}"
         COMMENT "Generating ${name} resource loader"
+        ${maybe_CODEGEN}
         )
     # Generate the actual static library. Each source file is just a single file
     # with a character array compiled in containing the contents of the
@@ -263,6 +283,11 @@ function(cmrc_add_resources name)
 endfunction()
 
 function(_cmrc_generate_intermediate_cpp lib_ns symbol outfile infile)
+    if(POLICY CMP0171)
+        set(maybe_CODEGEN CODEGEN)
+    else()
+        set(maybe_CODEGEN "")
+    endif()
     add_custom_command(
         # This is the file we will generate
         OUTPUT "${outfile}"
@@ -277,6 +302,7 @@ function(_cmrc_generate_intermediate_cpp lib_ns symbol outfile infile)
                 "-DOUTPUT_FILE=${outfile}"
                 -P "${_CMRC_SCRIPT}"
         COMMENT "Generating intermediate file for ${infile}"
+        ${maybe_CODEGEN}
     )
 endfunction()
 
