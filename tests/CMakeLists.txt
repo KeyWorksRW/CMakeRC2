@@ -44,6 +44,26 @@ cmrc_add_test(
     TEST_ARGV "${CMAKE_CURRENT_SOURCE_DIR}/flower.jpg"
     )
 
+# Build + run the same flower resource under the CMRC_BASE64 fallback and
+# compare the two generated intermediate sources. flower.jpg (2.6 MB) is large
+# enough that the base64 form (~1.33x source expansion, decoded at startup)
+# shrinks the generated TU ~5x versus the '\xNN' literal form (~6x source
+# expansion) — the actual win of the flag is faster compilation of the
+# generated resource TU, not a smaller executable (the base64 exe is typically
+# larger because it stores the encoded string AND makes a decoded heap copy).
+# The b64 test reports the one-time startup (first-resolve) time and verifies
+# the decoded bytes match the on-disk file byte-for-byte. The nested build
+# also exercises CMRC_BASE64 end-to-end through the real CMakeRC module.
+add_test(
+    NAME flower_b64
+    COMMAND ${CMAKE_COMMAND}
+        -DCMRC_MODULE=${PROJECT_SOURCE_DIR}/CMakeRC.cmake
+        -DGEN=${CMAKE_GENERATOR}
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/flower_b64_scratch
+        -DFLOWER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/flower.jpg
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/flower_b64/run.cmake
+    )
+
 cmrc_add_test(
     NAME prefix
     PASS_REGEX "^Hello, world!"
