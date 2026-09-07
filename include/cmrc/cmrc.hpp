@@ -38,6 +38,16 @@
 #define CMRC_NO_EXCEPTIONS 1
 #endif
 
+// When CMRC_CMRC_HPP_BASE64 is defined by the generated resource TU
+// (CMRC_BASE64 build option), a base64 decoder is compiled into cmrc::detail so
+// generated resource files can be stored as compact base64 strings instead of
+// ~6x-expanded '\xNN' character literals. The decoder is intentionally excluded
+// from every other TU (including lib.cpp, which only uses raw begin/end
+// pointers) so base64 support costs nothing when CMRC_BASE64 is OFF.
+#if defined(CMRC_CMRC_HPP_BASE64)
+#include <cstddef>
+#endif
+
 namespace cmrc {
 namespace detail {
 struct dummy;
@@ -89,6 +99,87 @@ public:
 class directory_entry;
 
 namespace detail {
+
+#if defined(CMRC_CMRC_HPP_BASE64)
+// Decodes a resource stored as separate base64 chunk literals. MSVC's
+// per-literal (~16 K) and post-concatenation (64 K on pre-2022 versions) caps
+// make a single giant string literal illegal on older compilers, so the
+// generated resource TU splits the base64 into several static arrays and this
+// decoder stitches them back together. It returns the decoded bytes by value;
+// the generated TU stores that std::string in a namespace-scope static so the
+// buffer outlives the whole process (the same lifetime the resource library
+// assumes), then points its const char* const begin/end symbols into it.
+inline std::string b64_decode(const char *const *chunks,
+                              const std::size_t *lens, std::size_t count) {
+  std::size_t total = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    total += lens[i];
+  }
+  std::string encoded;
+  encoded.reserve(total);
+  for (std::size_t i = 0; i < count; ++i) {
+    encoded.append(chunks[i], lens[i]);
+  }
+
+  const char tbl[64] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',
+                        'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V',
+                        'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g',
+                        'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r',
+                        's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2',
+                        '3', '4', '5', '6', '7', '8', '9', '+', '/'};
+  signed char rev[256];
+  for (int i = 0; i < 256; ++i) {
+    rev[i] = static_cast<signed char>(-1);
+  }
+  for (int i = 0; i < 64; ++i) {
+    rev[static_cast<unsigned char>(tbl[i])] = static_cast<signed char>(i);
+  }
+
+  std::size_t len = encoded.size();
+  // Ignore trailing '=' padding; valid base64 lengths after stripping are
+  // 0, 2, 3 mod 4 (only the padding char sequence makes 1 mod 4 possible).
+  while (len > 0 && encoded[len - 1] == '=') {
+    --len;
+  }
+  std::size_t out_len = (len / 4) * 3;
+  if (len % 4 == 2) {
+    out_len += 1;
+  } else if (len % 4 == 3) {
+    out_len += 2;
+  }
+  std::string out;
+  out.reserve(out_len);
+  std::size_t i = 0;
+  while (i + 4 <= len) {
+    const int a = rev[static_cast<unsigned char>(encoded[i])];
+    const int b = rev[static_cast<unsigned char>(encoded[i + 1])];
+    const int c = rev[static_cast<unsigned char>(encoded[i + 2])];
+    const int d = rev[static_cast<unsigned char>(encoded[i + 3])];
+    out.push_back(static_cast<char>((a << 2) | (b >> 4)));
+    if (c != -1) {
+      out.push_back(static_cast<char>(((b & 0x0f) << 4) | (c >> 2)));
+    }
+    if (d != -1) {
+      out.push_back(static_cast<char>(((c & 0x03) << 6) | d));
+    }
+    i += 4;
+  }
+  // Trailing partial group left after padding was stripped:
+  // 2 chars -> 1 byte, 3 chars -> 2 bytes.
+  if (len - i == 2) {
+    const int a = rev[static_cast<unsigned char>(encoded[i])];
+    const int b = rev[static_cast<unsigned char>(encoded[i + 1])];
+    out.push_back(static_cast<char>((a << 2) | (b >> 4)));
+  } else if (len - i == 3) {
+    const int a = rev[static_cast<unsigned char>(encoded[i])];
+    const int b = rev[static_cast<unsigned char>(encoded[i + 1])];
+    const int c = rev[static_cast<unsigned char>(encoded[i + 2])];
+    out.push_back(static_cast<char>((a << 2) | (b >> 4)));
+    out.push_back(static_cast<char>(((b & 0x0f) << 4) | (c >> 2)));
+  }
+  return out;
+}
+#endif // CMRC_CMRC_HPP_BASE64
 
 class directory;
 class file_data;

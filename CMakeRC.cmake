@@ -3,22 +3,124 @@
 if(_CMRC_GENERATE_MODE)
     # Read in the digits
     file(READ "${INPUT_FILE}" bytes HEX)
-    # Format each pair into a character literal. Heuristics seem to favor doing
-    # the conversion in groups of five for fastest conversion
-    string(REGEX REPLACE "(..)(..)(..)(..)(..)" "'\\\\x\\1','\\\\x\\2','\\\\x\\3','\\\\x\\4','\\\\x\\5'," chars "${bytes}")
-    # Since we did this in groups, we have some leftovers to clean up
     string(LENGTH "${bytes}" n_bytes2)
     math(EXPR n_bytes "${n_bytes2} / 2")
-    math(EXPR remainder "${n_bytes} % 5") # <-- '5' is the grouping count from above
-    set(cleanup_re "$")
-    set(cleanup_sub )
-    while(remainder)
-        set(cleanup_re "(..)${cleanup_re}")
-        set(cleanup_sub "'\\\\x\\${remainder}',${cleanup_sub}")
-        math(EXPR remainder "${remainder} - 1")
-    endwhile()
-    if(NOT cleanup_re STREQUAL "$")
-        string(REGEX REPLACE "${cleanup_re}" "${cleanup_sub}" chars "${chars}")
+    if(CMRC_BASE64)
+        # Encode the raw bytes as a standard base64 string. The hex string from
+        # file(READ ... HEX) is processed in groups of 6 hex digits (= 3 bytes
+        # = 4 base64 chars). math(EXPR) understands 0x... literals, so each
+        # group is packed into an integer and split into four 6-bit indices;
+        # the lookup table maps each index to its base64 character. A final
+        # group of 2 or 4 hex digits (1 or 2 remaining bytes) produces 2 or 3
+        # chars with '=' padding. This keeps the generated source at ~1.33x the
+        # resource size instead of the ~6x of the '\xNN' literal fallback.
+        set(_b64_alpha "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+        set(b64 "")
+        string(LENGTH "${bytes}" _b64_hex_len)
+        # Process the hex in slices. CMake expands a variable in full every time
+        # it is referenced, so looping with "${bytes}" (the whole file's hex)
+        # as the SUBSTRING source would be O(n^2). Instead each iteration pulls
+        # a small slice once and encodes it with small local variables, then
+        # appends the encoded slice to b64 in a single operation.
+        set(_b64_slice_size 18000) # 9000 bytes per slice
+        set(_b64_idx 0)
+        while(_b64_idx LESS _b64_hex_len)
+            string(SUBSTRING "${bytes}" ${_b64_idx} ${_b64_slice_size} _b64_slice_hex)
+            string(LENGTH "${_b64_slice_hex}" _b64_slice_len)
+            set(_b64_slice_b64 "")
+            set(_b64_si 0)
+            while(_b64_si LESS _b64_slice_len)
+                string(SUBSTRING "${_b64_slice_hex}" ${_b64_si} 6 _b64_grp)
+                string(LENGTH "${_b64_grp}" _b64_grp_len)
+                if(_b64_grp_len EQUAL 6)
+                    math(EXPR _b64_v "0x${_b64_grp}")
+                    math(EXPR _b64_c1 "(${_b64_v} >> 18) & 63")
+                    math(EXPR _b64_c2 "(${_b64_v} >> 12) & 63")
+                    math(EXPR _b64_c3 "(${_b64_v} >> 6) & 63")
+                    math(EXPR _b64_c4 "${_b64_v} & 63")
+                    set(_b64_out_chars "")
+                    foreach(_b64_ci IN ITEMS ${_b64_c1} ${_b64_c2} ${_b64_c3} ${_b64_c4})
+                        string(SUBSTRING "${_b64_alpha}" ${_b64_ci} 1 _b64_ch)
+                        set(_b64_out_chars "${_b64_out_chars}${_b64_ch}")
+                    endforeach()
+                    string(APPEND _b64_slice_b64 "${_b64_out_chars}")
+                elseif(_b64_grp_len EQUAL 4)
+                    # 2 remaining bytes -> 3 chars + '='
+                    math(EXPR _b64_v "0x${_b64_grp}")
+                    math(EXPR _b64_c1 "(${_b64_v} >> 10) & 63")
+                    math(EXPR _b64_c2 "(${_b64_v} >> 4) & 63")
+                    math(EXPR _b64_c3 "(${_b64_v} & 15) << 2")
+                    set(_b64_out_chars "")
+                    foreach(_b64_ci IN ITEMS ${_b64_c1} ${_b64_c2} ${_b64_c3})
+                        string(SUBSTRING "${_b64_alpha}" ${_b64_ci} 1 _b64_ch)
+                        set(_b64_out_chars "${_b64_out_chars}${_b64_ch}")
+                    endforeach()
+                    string(APPEND _b64_slice_b64 "${_b64_out_chars}=")
+                elseif(_b64_grp_len EQUAL 2)
+                    # 1 remaining byte -> 2 chars + '=='
+                    math(EXPR _b64_v "0x${_b64_grp}")
+                    math(EXPR _b64_c1 "(${_b64_v} >> 2) & 63")
+                    math(EXPR _b64_c2 "(${_b64_v} & 3) << 4")
+                    set(_b64_out_chars "")
+                    foreach(_b64_ci IN ITEMS ${_b64_c1} ${_b64_c2})
+                        string(SUBSTRING "${_b64_alpha}" ${_b64_ci} 1 _b64_ch)
+                        set(_b64_out_chars "${_b64_out_chars}${_b64_ch}")
+                    endforeach()
+                    string(APPEND _b64_slice_b64 "${_b64_out_chars}==")
+                endif()
+                math(EXPR _b64_si "${_b64_si} + 6")
+            endwhile()
+            string(APPEND b64 "${_b64_slice_b64}")
+            math(EXPR _b64_idx "${_b64_idx} + ${_b64_slice_size}")
+        endwhile()
+        # Split the base64 into chunks that stay under MSVC's per-literal and
+        # post-concatenation caps (C2026 / 64K on pre-2022 compilers). Each
+        # chunk is its own static array; b64_decode() stitches them back
+        # together at runtime, so there is no single giant string literal
+        # anywhere and arbitrarily large resources are supported on old MSVC.
+        set(_b64_chunk_size 16000)
+        set(_b64_chunks )
+        set(_b64_idx 0)
+        string(LENGTH "${b64}" _b64_blen)
+        while(_b64_idx LESS _b64_blen)
+            string(SUBSTRING "${b64}" ${_b64_idx} ${_b64_chunk_size} _b64_chunk)
+            list(APPEND _b64_chunks "${_b64_chunk}")
+            math(EXPR _b64_idx "${_b64_idx} + ${_b64_chunk_size}")
+        endwhile()
+        list(LENGTH _b64_chunks _b64_nchunks)
+        # Build the C++ declarations for the chunk arrays, the length array
+        # and the pointer array (substituted into the template below via @VAR@).
+        set(_b64_emit "")
+        set(_b64_lens_emit "static const std::size_t b64_lens[] = { ")
+        set(_b64_parts_emit "static const char* const b64_parts[] = { ")
+        set(_b64_ci 0)
+        foreach(_b64_chunk IN LISTS _b64_chunks)
+            if(NOT _b64_emit STREQUAL "")
+                string(APPEND _b64_emit "\n")
+            endif()
+            string(APPEND _b64_emit "static const char b64_${_b64_ci}[] = \"${_b64_chunk}\";")
+            string(APPEND _b64_lens_emit "sizeof(b64_${_b64_ci}) - 1, ")
+            string(APPEND _b64_parts_emit "b64_${_b64_ci}, ")
+            math(EXPR _b64_ci "${_b64_ci} + 1")
+        endforeach()
+        string(APPEND _b64_lens_emit "};")
+        string(APPEND _b64_parts_emit "};")
+    else()
+        # Format each pair into a character literal. Heuristics seem to favor doing
+        # the conversion in groups of five for fastest conversion
+        string(REGEX REPLACE "(..)(..)(..)(..)(..)" "'\\\\x\\1','\\\\x\\2','\\\\x\\3','\\\\x\\4','\\\\x\\5'," chars "${bytes}")
+        # Since we did this in groups, we have some leftovers to clean up
+        math(EXPR remainder "${n_bytes} % 5") # <-- '5' is the grouping count from above
+        set(cleanup_re "$")
+        set(cleanup_sub )
+        while(remainder)
+            set(cleanup_re "(..)${cleanup_re}")
+            set(cleanup_sub "'\\\\x\\${remainder}',${cleanup_sub}")
+            math(EXPR remainder "${remainder} - 1")
+        endwhile()
+        if(NOT cleanup_re STREQUAL "$")
+            string(REGEX REPLACE "${cleanup_re}" "${cleanup_sub}" chars "${chars}")
+        endif()
     endif()
     # #embed takes a header-name token: normalize the resource path to forward
     # slashes and keep it quoted. The generated file lives in the build tree
@@ -28,6 +130,22 @@ if(_CMRC_GENERATE_MODE)
     # embeddable, otherwise the hex-literal fallback below is emitted
     # unchanged (pre-#embed compilers, MSVC, etc. all take the fallback).
     file(TO_CMAKE_PATH "${INPUT_FILE}" INPUT_FILE)
+    # The generated resource TU prefers #embed whenever __has_embed() reports
+    # the file as embeddable. With CMRC_DISABLE_EMBED (diagnostic/testing only)
+    # the guard is forced to #if 0 so the fallback path is compiled regardless.
+    if(CMRC_DISABLE_EMBED)
+        set(_cmrc_embed_guard "#if 0")
+        # When the fallback is forced, the base64/literal code is always
+        # emitted, so cmrc.hpp must always be included in base64 mode.
+        set(_cmrc_b64_include_guard "#if 1")
+    else()
+        set(_cmrc_embed_guard "#if defined(__has_embed)")
+        # Include cmrc.hpp (and enable the decoder) only when the code below
+        # actually takes the base64 fallback (no #embed, or file not
+        # embeddable). A #embed-capable compiler that can embed the file skips
+        # the include entirely, so the decoder is not even compiled.
+        set(_cmrc_b64_include_guard "#if !defined(__has_embed) || !__has_embed(\"@INPUT_FILE@\")")
+    endif()
     if(n_bytes EQUAL 0)
         # A #embed of an empty file (without if_empty()) is ill-formed in some
         # compilers; keep the pre-existing zero-byte-array behaviour.
@@ -39,9 +157,41 @@ if(_CMRC_GENERATE_MODE)
             }}}
         ]] code)
     else()
-        string(CONFIGURE [[
+        if(CMRC_BASE64)
+            string(CONFIGURE [[
+            @_cmrc_b64_include_guard@
+            #define CMRC_CMRC_HPP_BASE64
+            #include <cmrc/cmrc.hpp>
+            #endif
+            namespace {
+            @_cmrc_embed_guard@
+            #  if __has_embed("@INPUT_FILE@")
+            const char file_array[] = { #embed "@INPUT_FILE@" };
+            const char* const file_ptr = file_array;
+            #  else
+            @_b64_emit@
+            @_b64_lens_emit@
+            @_b64_parts_emit@
+            static const std::string b64_decoded = cmrc::detail::b64_decode(b64_parts, b64_lens, @_b64_nchunks@);
+            const char* const file_ptr = b64_decoded.data();
+            #  endif
+            #else
+            @_b64_emit@
+            @_b64_lens_emit@
+            @_b64_parts_emit@
+            static const std::string b64_decoded = cmrc::detail::b64_decode(b64_parts, b64_lens, @_b64_nchunks@);
+            const char* const file_ptr = b64_decoded.data();
+            #endif
+            }
+            namespace cmrc { namespace @NAMESPACE@ { namespace res_chars {
+            extern const char* const @SYMBOL@_begin = file_ptr;
+            extern const char* const @SYMBOL@_end = file_ptr + @n_bytes@;
+            }}}
+        ]] code)
+        else()
+            string(CONFIGURE [[
             namespace { const char file_array[] = {
-            #if defined(__has_embed)
+            @_cmrc_embed_guard@
             #  if __has_embed("@INPUT_FILE@")
             #embed "@INPUT_FILE@"
             #  else
@@ -56,6 +206,7 @@ if(_CMRC_GENERATE_MODE)
             extern const char* const @SYMBOL@_end = file_array + @n_bytes@;
             }}}
         ]] code)
+        endif()
     endif()
     file(WRITE "${OUTPUT_FILE}" "${code}")
     # Exit from the script. Nothing else needs to be processed
@@ -63,6 +214,19 @@ if(_CMRC_GENERATE_MODE)
 endif()
 
 set(_version 3.0.0)
+
+# Choose the fallback encoding used when #embed is not available: OFF (default)
+# stores resources as '\xNN' character literals (~6x source expansion, zero
+# runtime cost); ON stores them as base64 strings (~1.33x source expansion, a
+# one-time decode at static-initialization time). Modern compilers get #embed
+# regardless of this flag; it only affects the fallback path.
+option(CMRC_BASE64 "Store resources as base64 (decoded at startup) when #embed is unavailable" OFF)
+
+# Diagnostic/testing option: force the fallback path even on compilers that
+# support #embed, so the literal/base64 generators can be exercised directly.
+# Normally the generated resource TU prefers #embed whenever
+# __has_embed() reports the file as embeddable, and this option is OFF.
+option(CMRC_DISABLE_EMBED "Force the fallback encoding instead of #embed (diagnostic/testing only)" OFF)
 
 cmake_minimum_required(VERSION 3.12...4.0)
 include(CMakeParseArguments)
@@ -335,6 +499,8 @@ function(_cmrc_generate_intermediate_cpp lib_ns symbol outfile infile)
                 -DSYMBOL=${symbol}
                 "-DINPUT_FILE=${infile}"
                 "-DOUTPUT_FILE=${outfile}"
+                "-DCMRC_BASE64=${CMRC_BASE64}"
+                "-DCMRC_DISABLE_EMBED=${CMRC_DISABLE_EMBED}"
                 -P "${_CMRC_SCRIPT}"
         COMMENT "Generating intermediate file for ${infile}"
         ${maybe_CODEGEN}

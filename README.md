@@ -312,3 +312,71 @@ int foo() {
     auto rose = fs.open("flowers/rose.jpg");
 }
 ```
+
+## How Resources Are Embedded: `#embed`, Literals, and Base64
+
+When CMakeRC generates the source file that holds a resource, it picks the
+best representation the *compiling compiler* supports:
+
+1. **`#embed` (C23 / C++26)** — If the compiler supports `#embed` (`__has_embed`
+   is defined) *and* reports the resource as embeddable, the generated TU uses
+   it directly:
+
+   ```cpp
+   #if defined(__has_embed) && __has_embed(".../icon.png")
+   #embed ".../icon.png"
+   #endif
+   ```
+
+   `#embed` is the ideal path: zero source expansion, zero runtime cost, and
+   the raw bytes live in `.rodata`. No configuration is needed — CMakeRC
+   detects it automatically. GCC 15+, Clang 17+, and recent MSVC/EDG-based
+   toolsets support it.
+
+2. **`\xNN` character literals (fallback, default)** — On pre-`#embed`
+   compilers (older GCC/Clang, most MSVC), each byte becomes a `'\xNN'`
+   character literal in a big `const char[]` array. This has zero runtime cost
+   (no decoding) and works on every C++11 compiler, but the generated source is
+   roughly **6× the resource size** (18 MB of source for a 2.5 MB image), which
+   significantly slows down parsing.
+
+3. **Base64 fallback (`CMRC_BASE64=ON`)** — Set this CMake option to store
+   fallback resources as base64 strings split into small literals, decoded once
+   at static-initialization time:
+
+   ```cmake
+   # in your project's CMakeLists.txt, before cmrc_add_resource_library:
+   set(CMRC_BASE64 ON)
+   ```
+
+   The generated source is roughly **1.33× the resource size** (plus small
+   chunk overhead), so parsing is ~5× faster than the `\xNN` form. The
+   decoder lives in `cmrc/cmrc.hpp`, guarded by `CMRC_CMRC_HPP_BASE64` so it is
+   not even compiled into translation units that don't use it. `#embed` still
+   takes precedence whenever the compiler supports it.
+
+### The tradeoff, by resource size
+
+- **Small resources (a few KB)** — Either fallback works fine; the generated
+  TU is tiny either way. The `\xNN` literals have the edge (no runtime decode,
+  no startup cost), so the default is a sensible choice.
+- **Large resources (hundreds of KB to MBs)** — The `\xNN` form balloons the
+  generated source (~6×) and makes the resource TU slow to compile. Base64
+  (~1.33×) dramatically speeds up compilation of that TU. The costs are a
+  one-time decode at startup and a heap allocation (the decoded bytes are
+  copied out of the base64 string). Note that the *executable* is typically
+  slightly *larger* with base64 — it stores the encoded string *and* the
+  decoded heap buffer (and the decoder), so the win is compile time and
+  generated-source size, not binary size. If you have truly massive resources,
+  `#embed` on a modern compiler is strictly better than both.
+
+  In the test suite, `tests/flower.jpg` (2.5 MB) is used to compare the two
+  fallbacks: the `\xNN` intermediate is ~36 MB while the base64 intermediate is
+  ~7 MB, and both produce byte-for-byte identical embedded content
+  (`tests/flower_b64` verifies this automatically, along with the base64
+  startup time).
+
+`CMRC_DISABLE_EMBED` (default `OFF`) is provided for diagnostics and testing:
+setting it forces the fallback path even on `#embed`-capable compilers, so you
+can validate the literal/base64 generators without a pre-`#embed` toolchain.
+Normal builds should leave it `OFF`.
