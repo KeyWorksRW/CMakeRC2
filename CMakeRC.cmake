@@ -32,7 +32,7 @@ if(_CMRC_GENERATE_MODE)
     return()
 endif()
 
-set(_version 2.0.0)
+set(_version 3.0.0)
 
 cmake_minimum_required(VERSION 3.12...4.0)
 include(CMakeParseArguments)
