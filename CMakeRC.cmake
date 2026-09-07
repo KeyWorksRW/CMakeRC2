@@ -20,13 +20,43 @@ if(_CMRC_GENERATE_MODE)
     if(NOT cleanup_re STREQUAL "$")
         string(REGEX REPLACE "${cleanup_re}" "${cleanup_sub}" chars "${chars}")
     endif()
-    string(CONFIGURE [[
-        namespace { const char file_array[] = { @chars@ 0 }; }
-        namespace cmrc { namespace @NAMESPACE@ { namespace res_chars {
-        extern const char* const @SYMBOL@_begin = file_array;
-        extern const char* const @SYMBOL@_end = file_array + @n_bytes@;
-        }}}
-    ]] code)
+    # #embed takes a header-name token: normalize the resource path to forward
+    # slashes and keep it quoted. The generated file lives in the build tree
+    # while the resource lives in the source tree, so the absolute path is
+    # baked into the directive; the #embed branch is only active when the
+    # compiling compiler defines __has_embed AND reports the file as
+    # embeddable, otherwise the hex-literal fallback below is emitted
+    # unchanged (pre-#embed compilers, MSVC, etc. all take the fallback).
+    file(TO_CMAKE_PATH "${INPUT_FILE}" INPUT_FILE)
+    if(n_bytes EQUAL 0)
+        # A #embed of an empty file (without if_empty()) is ill-formed in some
+        # compilers; keep the pre-existing zero-byte-array behaviour.
+        string(CONFIGURE [[
+            namespace { const char file_array[] = { 0 }; }
+            namespace cmrc { namespace @NAMESPACE@ { namespace res_chars {
+            extern const char* const @SYMBOL@_begin = file_array;
+            extern const char* const @SYMBOL@_end = file_array + 0;
+            }}}
+        ]] code)
+    else()
+        string(CONFIGURE [[
+            namespace { const char file_array[] = {
+            #if defined(__has_embed)
+            #  if __has_embed("@INPUT_FILE@")
+            #embed "@INPUT_FILE@"
+            #  else
+            @chars@ 0
+            #  endif
+            #else
+            @chars@ 0
+            #endif
+            }; }
+            namespace cmrc { namespace @NAMESPACE@ { namespace res_chars {
+            extern const char* const @SYMBOL@_begin = file_array;
+            extern const char* const @SYMBOL@_end = file_array + @n_bytes@;
+            }}}
+        ]] code)
+    endif()
     file(WRITE "${OUTPUT_FILE}" "${code}")
     # Exit from the script. Nothing else needs to be processed
     return()

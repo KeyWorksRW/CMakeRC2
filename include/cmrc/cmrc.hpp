@@ -1,9 +1,9 @@
-// CR: [09-06-2026]
-
 #pragma once
 
 #ifndef CMRC_CMRC_HPP_INCLUDED
 #define CMRC_CMRC_HPP_INCLUDED
+
+// CR: [09-06-2026]
 
 #include <cassert>
 #include <cstdio>
@@ -16,6 +16,22 @@
 #include <system_error>
 #include <type_traits>
 #include <vector>
+
+#if defined(_MSVC_LANG)
+#define CMRC_CPLUSPLUS _MSVC_LANG
+#else
+#define CMRC_CPLUSPLUS __cplusplus
+#endif
+
+#if CMRC_CPLUSPLUS >= 201703L && defined(__has_include)
+#if __has_include(<string_view>)
+#include <string_view>
+#define CMRC_HAS_STRING_VIEW 1
+#endif
+#endif
+#ifndef CMRC_HAS_STRING_VIEW
+#define CMRC_HAS_STRING_VIEW 0
+#endif
 
 #if !(defined(__EXCEPTIONS) || defined(__cpp_exceptions) ||                    \
       defined(_CPPUNWIND) || defined(CMRC_NO_EXCEPTIONS))
@@ -60,6 +76,12 @@ public:
     return static_cast<std::size_t>(std::distance(begin(), end()));
   }
 
+#if CMRC_HAS_STRING_VIEW
+  std::string_view view() const noexcept {
+    return std::string_view(_begin, size());
+  }
+#endif
+
   file() = default;
   file(iterator beg, iterator end) noexcept : _begin(beg), _end(end) {}
 };
@@ -70,6 +92,12 @@ namespace detail {
 
 class directory;
 class file_data;
+
+#if CMRC_HAS_STRING_VIEW
+using path_param = std::string_view;
+#else
+using path_param = const std::string &;
+#endif
 
 class file_or_directory {
   union _data_t {
@@ -112,10 +140,19 @@ struct created_subdirectory {
 class directory {
   std::list<file_data> _files;
   std::list<directory> _dirs;
+#if CMRC_CPLUSPLUS >= 201402L
+  std::map<std::string, file_or_directory, std::less<>> _index;
+#else
   std::map<std::string, file_or_directory> _index;
+#endif
 
+#if CMRC_CPLUSPLUS >= 201402L
+  using base_iterator =
+      std::map<std::string, file_or_directory, std::less<>>::const_iterator;
+#else
   using base_iterator =
       std::map<std::string, file_or_directory>::const_iterator;
+#endif
 
 public:
   directory() = default;
@@ -131,8 +168,13 @@ public:
 
   file_or_directory *add_file(std::string name, const char *begin,
                               const char *end) & {
+#if CMRC_CPLUSPLUS >= 201402L
+    std::map<std::string, file_or_directory, std::less<>>::iterator existing =
+        _index.find(name);
+#else
     std::map<std::string, file_or_directory>::iterator existing =
         _index.find(name);
+#endif
     assert(existing == _index.end());
     if (existing != _index.end()) {
       return &existing->second;
@@ -197,29 +239,32 @@ public:
   iterator end() const noexcept { return iterator(_index.end(), _index.end()); }
 };
 
-inline std::string normalize_path(std::string path) {
+inline std::string normalize_path(detail::path_param path) {
+  // Work on a copy: a string_view parameter cannot be modified in place, and
+  // the const-reference fallback must not mutate the caller's string either.
+  std::string p(path);
   // Translate backslashes to forward slashes.
-  for (std::string::size_type idx = path.find('\\'); idx != std::string::npos;
-       idx = path.find('\\', idx + 1)) {
-    path[idx] = '/';
+  for (std::string::size_type idx = p.find('\\'); idx != std::string::npos;
+       idx = p.find('\\', idx + 1)) {
+    p[idx] = '/';
   }
-  while (path.find("/") == 0) {
-    path.erase(path.begin());
+  while (p.find("/") == 0) {
+    p.erase(p.begin());
   }
-  while (!path.empty() && (path.rfind("/") == path.size() - 1)) {
-    path.pop_back();
+  while (!p.empty() && (p.rfind("/") == p.size() - 1)) {
+    p.pop_back();
   }
-  auto off = path.npos;
-  while ((off = path.find("//")) != path.npos) {
-    path.erase(path.begin() + static_cast<std::string::difference_type>(off));
+  auto off = p.npos;
+  while ((off = p.find("//")) != p.npos) {
+    p.erase(p.begin() + static_cast<std::string::difference_type>(off));
   }
   // Collapse "." and ".." path components.
   std::vector<std::string> segments;
   std::string::size_type pos = 0;
-  while (pos <= path.size()) {
-    std::string::size_type sep = path.find('/', pos);
-    std::string segment = path.substr(
-        pos, sep == std::string::npos ? std::string::npos : sep - pos);
+  while (pos <= p.size()) {
+    std::string::size_type sep = p.find('/', pos);
+    std::string segment =
+        p.substr(pos, sep == std::string::npos ? std::string::npos : sep - pos);
     if (segment.empty() || segment == ".") {
       // Skip empty (duplicate slash) and "." components.
     } else if (segment == "..") {
@@ -246,8 +291,13 @@ inline std::string normalize_path(std::string path) {
   return result;
 }
 
+#if CMRC_CPLUSPLUS >= 201402L
+using index_type =
+    std::map<std::string, const cmrc::detail::file_or_directory *, std::less<>>;
+#else
 using index_type =
     std::map<std::string, const cmrc::detail::file_or_directory *>;
+#endif
 
 } // namespace detail
 
@@ -281,9 +331,9 @@ using directory_iterator = detail::directory::iterator;
 class embedded_filesystem {
   // Never-null:
   const cmrc::detail::index_type *_index;
-  const detail::file_or_directory *_get(std::string path) const {
-    path = detail::normalize_path(path);
-    auto found = _index->find(path);
+  const detail::file_or_directory *_get(detail::path_param path) const {
+    const std::string normalized = detail::normalize_path(path);
+    auto found = _index->find(normalized);
     if (found == _index->end()) {
       return nullptr;
     } else {
@@ -295,59 +345,64 @@ public:
   explicit embedded_filesystem(const detail::index_type &index)
       : _index(&index) {}
 
-  file open(const std::string &path) const {
+  file open(detail::path_param path) const {
     auto entry_ptr = _get(path);
     if (!entry_ptr) {
 #ifdef CMRC_NO_EXCEPTIONS
-      fprintf(stderr, "Error no such file or directory: %s\n", path.c_str());
+      fprintf(stderr, "Error no such file or directory: %s\n",
+              std::string(path).c_str());
       abort();
 #else
       throw std::system_error(
-          make_error_code(std::errc::no_such_file_or_directory), path);
+          make_error_code(std::errc::no_such_file_or_directory),
+          std::string(path));
 #endif
     }
     if (!entry_ptr->is_file()) {
 #ifdef CMRC_NO_EXCEPTIONS
-      fprintf(stderr, "Error is a directory: %s\n", path.c_str());
+      fprintf(stderr, "Error is a directory: %s\n", std::string(path).c_str());
       abort();
 #else
-      throw std::system_error(make_error_code(std::errc::is_a_directory), path);
+      throw std::system_error(make_error_code(std::errc::is_a_directory),
+                              std::string(path));
 #endif
     }
     auto &dat = entry_ptr->as_file();
     return file{dat.begin_ptr, dat.end_ptr};
   }
 
-  bool is_file(const std::string &path) const noexcept {
+  bool is_file(detail::path_param path) const noexcept {
     auto entry_ptr = _get(path);
     return entry_ptr && entry_ptr->is_file();
   }
 
-  bool is_directory(const std::string &path) const noexcept {
+  bool is_directory(detail::path_param path) const noexcept {
     auto entry_ptr = _get(path);
     return entry_ptr && entry_ptr->is_directory();
   }
 
-  bool exists(const std::string &path) const noexcept { return !!_get(path); }
+  bool exists(detail::path_param path) const noexcept { return !!_get(path); }
 
-  directory_iterator iterate_directory(const std::string &path) const {
+  directory_iterator iterate_directory(detail::path_param path) const {
     auto entry_ptr = _get(path);
     if (!entry_ptr) {
 #ifdef CMRC_NO_EXCEPTIONS
-      fprintf(stderr, "Error no such file or directory: %s\n", path.c_str());
+      fprintf(stderr, "Error no such file or directory: %s\n",
+              std::string(path).c_str());
       abort();
 #else
       throw std::system_error(
-          make_error_code(std::errc::no_such_file_or_directory), path);
+          make_error_code(std::errc::no_such_file_or_directory),
+          std::string(path));
 #endif
     }
     if (!entry_ptr->is_directory()) {
 #ifdef CMRC_NO_EXCEPTIONS
-      fprintf(stderr, "Error not a directory: %s\n", path.c_str());
+      fprintf(stderr, "Error not a directory: %s\n", std::string(path).c_str());
       abort();
 #else
       throw std::system_error(make_error_code(std::errc::not_a_directory),
-                              path);
+                              std::string(path));
 #endif
     }
     return entry_ptr->as_directory().begin();
