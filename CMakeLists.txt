@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.6...4.0)
-project(CMakeRC VERSION 2.0.0)
+cmake_minimum_required(VERSION 3.21...4.0)
+project(CMakeRC VERSION 3.0.0)
 
 list(INSERT CMAKE_MODULE_PATH 0 "${PROJECT_SOURCE_DIR}/cmake")
 
