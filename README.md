@@ -333,6 +333,13 @@ best representation the *compiling compiler* supports:
    detects it automatically. GCC 15+, Clang 17+, and recent MSVC/EDG-based
    toolsets support it.
 
+   Clang predefines `__has_embed` in C++ modes where `#embed` is only an
+   extension, so it reports the directive through `-Wc23-extensions`
+   (enabled by default). The generated file therefore wraps the directive in
+   `#pragma clang diagnostic push/ignored/pop` guarded by
+   `defined(__clang__)` — GCC needs no suppression and warns about unknown
+   pragmas — so both compilers stay clean under `-Werror`.
+
 2. **`\xNN` character literals (fallback, default)** — On pre-`#embed`
    compilers (older GCC/Clang, most MSVC), each byte becomes a `'\xNN'`
    character literal in a big `const char[]` array. This has zero runtime cost
@@ -353,7 +360,9 @@ best representation the *compiling compiler* supports:
    chunk overhead), so parsing is ~5× faster than the `\xNN` form. The
    decoder lives in `cmrc/cmrc.hpp`, guarded by `CMRC_CMRC_HPP_BASE64` so it is
    not even compiled into translation units that don't use it. `#embed` still
-   takes precedence whenever the compiler supports it.
+   takes precedence whenever the compiler supports it: the include (and with it
+   the decoder) is emitted only for the branches that actually select the base64
+   fallback, so a `#embed`-capable build never pulls it in.
 
 ### The tradeoff, by resource size
 

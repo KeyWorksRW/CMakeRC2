@@ -54,6 +54,16 @@ This fork of [vector-of-bool/cmrc](https://github.com/vector-of-bool/cmrc) (CMak
 
 - CMakeRC module directory is now cached as a `CACHE INTERNAL` variable, so API functions called from the parent project still resolve helper sources when CMakeRC is included via FetchContent (2026-09-06).
 
+- **Clang `-Wc23-extensions` warning on generated resource TUs** (2026-10-22, [#34])
+  - Clang predefines `__has_embed` in every C++ mode even though `#embed` is only an extension there, and reports the directive through `-Wc23-extensions` (enabled by default), so `-Werror` consumers could not build the generated resources at all. The generator now emits a Clang-only `#pragma clang diagnostic push/ignored/pop` around the `#embed` in both the hex-literal and base64 templates; the `defined(__clang__)` guard avoids GCC's `-Wunknown-pragmas`.
+  - Added an `embed_nowarn` regression test that compiles the generated resource TU with `-Werror` (and `-Wunknown-pragmas` on GCC).
+
+- **`CMRC_BASE64` build produced broken resource TUs on `#embed`-capable compilers** (2026-10-22, defect from [#33])
+  - The base64 template built its `cmrc/cmrc.hpp` include guard from a CMake variable holding a literal `@INPUT_FILE@`. `string(CONFIGURE)` substitutes `@VAR@` in a single pass, so the placeholder survived into the generated source and every `__has_embed()` probe tested a nonexistent file. Consequence: `CMRC_BASE64=ON` never took the `#embed` path and always compiled the base64 decoder. The guard is now emitted with the real input path.
+  - That guard is emitted as nested `#if` / `#elif` groups instead of one `#if !defined(__has_embed) || !__has_embed(...)` expression, which does not parse on compilers that do not define the operator at all (MSVC, GCC < 15).
+  - The `#embed` branch of the base64 template used the inline `{ #embed "..." }` form; a preprocessing directive must start its own line, so the branch failed to compile as soon as the guard was correct. The directive is now emitted on its own line.
+  - Added the `embed_b64` regression test (builds `CMRC_BASE64=ON` with `#embed` enabled under `-Werror`) and `embed_b64_source`, which asserts the generated source contains no leftover `@PLACEHOLDER@` and keeps `#embed` on its own line.
+
 [3.0.0]: https://github.com/KeyWorksRW/CMakeRC2/commit/434c30a10469abfb0bc732b3d134219f1cf879f8
 [Unreleased]: https://github.com/KeyWorksRW/CMakeRC2/commits/main
 
@@ -66,3 +76,4 @@ This fork of [vector-of-bool/cmrc](https://github.com/vector-of-bool/cmrc) (CMak
 [#31]: https://github.com/KeyWorksRW/CMakeRC2/pull/31
 [#32]: https://github.com/KeyWorksRW/CMakeRC2/pull/32
 [#33]: https://github.com/KeyWorksRW/CMakeRC2/pull/33
+[#34]: https://github.com/KeyWorksRW/CMakeRC2/issues/34

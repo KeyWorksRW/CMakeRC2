@@ -115,6 +115,49 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/header_regen/run.cmake
     )
 
+# Regression test for https://github.com/KeyWorksRW/CMakeRC2/issues/34:
+# Clang predefines __has_embed() in C++ modes where #embed is only an
+# extension and reports the directive through -Wc23-extensions (enabled by
+# default), which prevented -Werror consumers from building the generated TU.
+# The generated source now suppresses that diagnostic for Clang only. Compile
+# the resource TU with -Werror so a recurrence fails the build here;
+# -Wunknown-pragmas catches a missing __clang__ guard on GCC, which would
+# otherwise report `#pragma clang diagnostic` itself.
+if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|GNU)$")
+    cmrc_add_test(
+        NAME embed_nowarn
+        PASS_REGEX "^Hello, world!"
+        RESOURCES hello.txt
+        )
+    target_compile_options(rc_embed_nowarn PRIVATE -Werror -Wall -Wextra -Wunknown-pragmas)
+endif()
+
+# Regression test for CMRC_BASE64 combined with #embed. The base64 template used
+# to emit two defects that only surface on a compiler which reports the resource
+# as embeddable: an unsubstituted @INPUT_FILE@ in the cmrc.hpp include guard
+# (string(CONFIGURE) substitutes @VAR@ only once, so the placeholder inside a
+# substituted variable survives) and the inline `{ #embed "..." }` form, which
+# is invalid because a preprocessing directive must start its own line. Build
+# the base64 path with #embed enabled, and assert on the generated source text
+# as well as on the runtime bytes.
+set(CMRC_BASE64 ON)
+set(CMRC_DISABLE_EMBED OFF)
+cmrc_add_test(
+    NAME embed_b64
+    PASS_REGEX "^Hello, world!"
+    RESOURCES hello.txt
+    )
+set(CMRC_BASE64 OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|GNU)$")
+    target_compile_options(rc_embed_b64 PRIVATE -Werror -Wall -Wextra -Wunknown-pragmas)
+endif()
+add_test(
+    NAME embed_b64_source
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC=${CMAKE_CURRENT_BINARY_DIR}/__cmrc_rc_embed_b64/intermediate/hello.txt.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/embed_b64_check.cmake
+    )
+
 
 # Regression tests for the 2026-09-06 code review of include/cmrc/cmrc.hpp
 # (see .ttm/code-review-cmrc-hpp.md for the fixes under test).
