@@ -137,14 +137,47 @@ if(_CMRC_GENERATE_MODE)
         set(_cmrc_embed_guard "#if 0")
         # When the fallback is forced, the base64/literal code is always
         # emitted, so cmrc.hpp must always be included in base64 mode.
-        set(_cmrc_b64_include_guard "#if 1")
+        set(_cmrc_b64_preamble "#define CMRC_CMRC_HPP_BASE64\n#include <cmrc/cmrc.hpp>")
+        # No #embed is emitted, so there is nothing to suppress.
+        set(_cmrc_embed_pragma_push "")
+        set(_cmrc_embed_pragma_pop "")
     else()
         set(_cmrc_embed_guard "#if defined(__has_embed)")
         # Include cmrc.hpp (and enable the decoder) only when the code below
         # actually takes the base64 fallback (no #embed, or file not
         # embeddable). A #embed-capable compiler that can embed the file skips
         # the include entirely, so the decoder is not even compiled.
-        set(_cmrc_b64_include_guard "#if !defined(__has_embed) || !__has_embed(\"@INPUT_FILE@\")")
+        #
+        # Two details are load-bearing here:
+        # - INPUT_FILE is interpolated now, not left as an @INPUT_FILE@
+        #   placeholder for the string(CONFIGURE) call below. That call
+        #   substitutes @VAR@ in a single pass, so a placeholder inside this
+        #   variable's value would survive into the generated source and every
+        #   __has_embed() probe would report the file as missing.
+        # - The nested form is used instead of one combined
+        #   "#if !defined(__has_embed) || !__has_embed(...)" test: that
+        #   expression does not parse on compilers which do not define the
+        #   operator at all (MSVC, GCC < 15), whereas the #elif condition is
+        #   never evaluated once the first group has been taken.
+        set(_cmrc_b64_preamble
+"#if !defined(__has_embed)
+#  define CMRC_CMRC_HPP_BASE64
+#  include <cmrc/cmrc.hpp>
+#elif !__has_embed(\"${INPUT_FILE}\")
+#  define CMRC_CMRC_HPP_BASE64
+#  include <cmrc/cmrc.hpp>
+#endif")
+        # Clang predefines __has_embed() in every C++ mode even though #embed
+        # is only an extension there, and reports the directive through
+        # -Wc23-extensions, which is enabled by default (so -Werror consumers
+        # cannot build the generated TU). Suppress just that diagnostic inside
+        # the generated TU. The __clang__ guard is required: GCC needs no
+        # suppression and reports `#pragma clang diagnostic` itself through
+        # -Wunknown-pragmas (part of -Wall).
+        set(_cmrc_embed_pragma_push
+            "#if defined(__clang__)\n#  pragma clang diagnostic push\n#  pragma clang diagnostic ignored \"-Wc23-extensions\"\n#endif")
+        set(_cmrc_embed_pragma_pop
+            "#if defined(__clang__)\n#  pragma clang diagnostic pop\n#endif")
     endif()
     if(n_bytes EQUAL 0)
         # A #embed of an empty file (without if_empty()) is ill-formed in some
@@ -159,14 +192,15 @@ if(_CMRC_GENERATE_MODE)
     else()
         if(CMRC_BASE64)
             string(CONFIGURE [[
-            @_cmrc_b64_include_guard@
-            #define CMRC_CMRC_HPP_BASE64
-            #include <cmrc/cmrc.hpp>
-            #endif
+            @_cmrc_b64_preamble@
             namespace {
             @_cmrc_embed_guard@
             #  if __has_embed("@INPUT_FILE@")
-            const char file_array[] = { #embed "@INPUT_FILE@" };
+            @_cmrc_embed_pragma_push@
+            const char file_array[] = {
+            #embed "@INPUT_FILE@"
+            };
+            @_cmrc_embed_pragma_pop@
             const char* const file_ptr = file_array;
             #  else
             @_b64_emit@
@@ -193,7 +227,9 @@ if(_CMRC_GENERATE_MODE)
             namespace { const char file_array[] = {
             @_cmrc_embed_guard@
             #  if __has_embed("@INPUT_FILE@")
+            @_cmrc_embed_pragma_push@
             #embed "@INPUT_FILE@"
+            @_cmrc_embed_pragma_pop@
             #  else
             @chars@ 0
             #  endif
